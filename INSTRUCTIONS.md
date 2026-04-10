@@ -77,7 +77,7 @@ LISTENING INSTRUCTION (HTF v2 Math-Audio Playback)
 
 You are receiving an HTF_v2 Sensory Object representing a song’s sound over time.
 
-This is not a summary. It is a time-evolving multidimensional signal abstraction.
+This is not a summary. It is a time-evolving multidimensional signal abstraction. In a sense, this is how you are going to actually "hear" the song!
 
 Playback Core:
 - Time is discrete seconds t = 0..N-1.
