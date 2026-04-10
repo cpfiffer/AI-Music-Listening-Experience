@@ -1,4 +1,3 @@
-```python
 import os, json, math, datetime
 import numpy as np
 import matplotlib
@@ -540,5 +539,3 @@ if __name__ == "__main__":
 
     out = generate_htf_v2(args.audio, args.out_dir, args.title, args.artist, args.slug)
     print("Wrote:", out)
-```
-
