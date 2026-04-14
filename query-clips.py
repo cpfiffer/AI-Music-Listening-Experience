@@ -164,6 +164,99 @@ def format_clip_json(clip):
     }
 
 
+def extract_word(clip):
+    """Extract the word from a clip filename like 'love_01.wav' -> 'love'."""
+    filename = clip.get("filename", "")
+    # strip extension, then strip trailing _NN variant number
+    import re
+    base = filename.rsplit(".", 1)[0] if "." in filename else filename
+    match = re.match(r"^(.+?)_(\d+)$", base)
+    if match:
+        return match.group(1)
+    return base
+
+
+def group_by_word(clips, sort_key=None):
+    """Group clips by word, compute per-word aggregate descriptor scores.
+    Returns list of word entries sorted by sort_key (a descriptor) or variant count."""
+    from collections import defaultdict
+    word_groups = defaultdict(list)
+    for clip in clips:
+        word = extract_word(clip)
+        word_groups[word].append(clip)
+
+    word_entries = []
+    for word, variants in word_groups.items():
+        # average descriptor scores across variants
+        avg_scores = {}
+        for key in DESCRIPTOR_KEYS:
+            vals = [v.get("descriptor_scores", {}).get(key, 0.0) for v in variants]
+            avg_scores[key] = sum(vals) / len(vals) if vals else 0.0
+
+        # best variant (highest value of sort_key, or most vocalish by default)
+        rank_key = sort_key if sort_key in DESCRIPTOR_KEYS else "vocalish"
+        best = max(variants, key=lambda v: v.get("descriptor_scores", {}).get(rank_key, 0.0))
+
+        # collect all unique tags and roles across variants
+        all_tags = set()
+        all_roles = set()
+        for v in variants:
+            all_tags.update(v.get("descriptor_tags", []))
+            all_roles.update(v.get("suggested_roles", []))
+
+        avg_dur = sum(v.get("duration_s", 0) for v in variants) / len(variants)
+
+        word_entries.append({
+            "word": word,
+            "variant_count": len(variants),
+            "avg_duration_s": round(avg_dur, 3),
+            "avg_descriptor_scores": {k: round(v, 3) for k, v in avg_scores.items()},
+            "all_tags": sorted(all_tags),
+            "all_roles": sorted(all_roles),
+            "best_variant": best.get("relative_path"),
+            "best_variant_scores": best.get("descriptor_scores", {}),
+            "variants": [v.get("relative_path") for v in variants],
+            "_library": variants[0].get("_library", "?"),
+        })
+
+    # sort
+    if sort_key in DESCRIPTOR_KEYS:
+        word_entries.sort(key=lambda w: w["avg_descriptor_scores"].get(sort_key, 0), reverse=True)
+    else:
+        word_entries.sort(key=lambda w: w["variant_count"], reverse=True)
+
+    return word_entries
+
+
+def format_word_line(entry, idx):
+    """Format a word entry for terminal output."""
+    word = entry["word"]
+    lib = entry["_library"]
+    n = entry["variant_count"]
+    dur = entry["avg_duration_s"]
+    scores = entry["avg_descriptor_scores"]
+    tags = ", ".join(entry["all_tags"][:5])
+
+    top_scores = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    score_str = " ".join(f"{k}={v:.2f}" for k, v in top_scores)
+
+    return f"  {idx:3d}. [{lib}] \"{word}\" ({n} variants, avg {dur:.2f}s)  tags=[{tags}]  {score_str}"
+
+
+def format_word_json(entry):
+    """Format a word entry for JSON output."""
+    return {
+        "word": entry["word"],
+        "variant_count": entry["variant_count"],
+        "avg_duration_s": entry["avg_duration_s"],
+        "avg_descriptor_scores": entry["avg_descriptor_scores"],
+        "all_tags": entry["all_tags"],
+        "all_roles": entry["all_roles"],
+        "best_variant": entry["best_variant"],
+        "variants": entry["variants"],
+    }
+
+
 def handle_similarity(clips, sim_indexes, target_path, mode="similar"):
     """Find clips similar to or contrasting with a target."""
     # find target in similarity indexes
@@ -232,6 +325,7 @@ def main():
     ap.add_argument("--contrast-with", help="Find clips contrasting with this relative path")
     ap.add_argument("--limit", type=int, default=20, help="Max results (default 20)")
     ap.add_argument("--json", action="store_true", help="Output as JSON")
+    ap.add_argument("--word-mode", action="store_true", help="Group results by word (for word-library data). Shows per-word aggregates instead of individual clips.")
     args = ap.parse_args()
 
     all_clips = []
@@ -256,9 +350,20 @@ def main():
     else:
         results = filter_clips(all_clips, args)
         results = sort_clips(results, args.sort)
-        results = results[:args.limit]
+        if not args.word_mode:
+            results = results[:args.limit]
 
-    if args.json:
+    # word-mode: group and aggregate
+    if args.word_mode and not (args.similar_to or args.contrast_with):
+        word_entries = group_by_word(results, args.sort)
+        word_entries = word_entries[:args.limit]
+        if args.json:
+            print(json.dumps([format_word_json(w) for w in word_entries], indent=2))
+        else:
+            print(f"Found {len(word_entries)} unique words (showing up to {args.limit}):\n")
+            for i, entry in enumerate(word_entries):
+                print(format_word_line(entry, i + 1))
+    elif args.json:
         out = [format_clip_json(c) for c in results]
         print(json.dumps(out, indent=2))
     else:
