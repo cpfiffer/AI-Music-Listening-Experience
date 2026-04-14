@@ -282,48 +282,57 @@ def descriptor_distance(vec_a, vec_b):
 
 
 def compute_similarity_index(results, k_similar=5, k_contrast=5):
-    """For each clip, find the k nearest and k furthest clips in descriptor space."""
+    """For each clip, find the k nearest and k furthest clips in descriptor space.
+    
+    For large datasets (>2000 clips), uses a chunked approach to avoid
+    allocating an n*n distance matrix.
+    """
     n = len(results)
-    vectors = []
-    for result in results:
-        scores = result["meta"]["descriptor_scores"]
-        vectors.append(descriptor_vector(scores))
-    vectors = np.array(vectors)
+    vectors = np.array([descriptor_vector(r["meta"]["descriptor_scores"]) for r in results])
 
-    # pairwise distance matrix
-    dist_matrix = np.zeros((n, n), dtype=np.float64)
-    for i in range(n):
-        for j in range(i + 1, n):
-            d = descriptor_distance(vectors[i], vectors[j])
-            dist_matrix[i, j] = d
-            dist_matrix[j, i] = d
+    USE_FULL_MATRIX = n <= 2000
 
-    similarity_index = {}
-    for i in range(n):
-        rel_path = results[i]["relative_path"]
-        dists = dist_matrix[i]
-        order = np.argsort(dists)
-        similar_indices = [j for j in order if j != i][:k_similar]
-        contrast_indices = [j for j in reversed(order) if j != i][:k_contrast]
+    if USE_FULL_MATRIX:
+        # small dataset: full pairwise matrix
+        dist_matrix = np.zeros((n, n), dtype=np.float32)
+        for i in range(n):
+            diff = vectors - vectors[i]
+            dist_matrix[i] = np.sqrt(np.sum(diff ** 2, axis=1))
 
-        similarity_index[rel_path] = {
-            "similar": [
-                {
-                    "relative_path": results[j]["relative_path"],
-                    "distance": round(float(dists[j]), 4),
-                    "index": int(j),
-                }
-                for j in similar_indices
-            ],
-            "contrast": [
-                {
-                    "relative_path": results[j]["relative_path"],
-                    "distance": round(float(dists[j]), 4),
-                    "index": int(j),
-                }
-                for j in contrast_indices
-            ],
-        }
+        similarity_index = {}
+        for i in range(n):
+            dists = dist_matrix[i]
+            order = np.argsort(dists)
+            similar_indices = [j for j in order if j != i][:k_similar]
+            contrast_indices = [j for j in reversed(order) if j != i][:k_contrast]
+            rel_path = results[i]["relative_path"]
+            similarity_index[rel_path] = {
+                "similar": [{"relative_path": results[j]["relative_path"], "distance": round(float(dists[j]), 4), "index": int(j)} for j in similar_indices],
+                "contrast": [{"relative_path": results[j]["relative_path"], "distance": round(float(dists[j]), 4), "index": int(j)} for j in contrast_indices],
+            }
+    else:
+        # large dataset: compute per-row distances without full matrix
+        k_need = max(k_similar, k_contrast)
+        similarity_index = {}
+        for i in range(n):
+            if (i + 1) % 2000 == 0:
+                print(f"  similarity: [{i + 1}/{n}]")
+            diff = vectors - vectors[i]
+            dists = np.sqrt(np.sum(diff ** 2, axis=1)).astype(np.float32)
+            dists[i] = np.inf  # exclude self from similar
+            sim_idx = np.argpartition(dists, k_similar)[:k_similar]
+            sim_idx = sim_idx[np.argsort(dists[sim_idx])]
+
+            dists[i] = -np.inf  # exclude self from contrast
+            con_idx = np.argpartition(-dists, k_contrast)[:k_contrast]
+            con_idx = con_idx[np.argsort(-dists[con_idx])]
+            dists[i] = 0.0
+
+            rel_path = results[i]["relative_path"]
+            similarity_index[rel_path] = {
+                "similar": [{"relative_path": results[j]["relative_path"], "distance": round(float(dists[j]), 4), "index": int(j)} for j in sim_idx],
+                "contrast": [{"relative_path": results[j]["relative_path"], "distance": round(float(dists[j]), 4), "index": int(j)} for j in con_idx],
+            }
 
     return similarity_index
 
@@ -1127,12 +1136,16 @@ def main():
     ap.add_argument("--input_dir", required=True, help="Folder of clips to inspect")
     ap.add_argument("--out_dir", required=True, help="Folder to write report artifacts")
     ap.add_argument("--limit", type=int, default=None, help="Optional maximum number of clips to inspect")
+    ap.add_argument("--metadata-only", action="store_true", help="Skip plot generation, output only JSON/CSV/similarity data")
     args = ap.parse_args()
 
+    metadata_only = args.metadata_only
     input_dir = Path(args.input_dir).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
-    clips_out = out_dir / "clips"
-    clips_out.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not metadata_only:
+        clips_out = out_dir / "clips"
+        clips_out.mkdir(parents=True, exist_ok=True)
 
     files = discover_audio_files(input_dir)
     if args.limit is not None:
@@ -1143,38 +1156,44 @@ def main():
 
     results = []
     errors = []
+    total = len(files)
 
-    for path in files:
+    for i, path in enumerate(files):
         rel = str(path.relative_to(input_dir))
-        slug = slugify(rel)
-        clip_dir = clips_out / slug
-        clip_dir.mkdir(parents=True, exist_ok=True)
+        if metadata_only and (i + 1) % 500 == 0:
+            print(f"  [{i + 1}/{total}] {rel}")
         try:
             meta, arrays = analyze_clip(path)
-
-            waveform_path = clip_dir / "waveform.png"
-            spectrogram_path = clip_dir / "spectrogram.png"
-            features_path = clip_dir / "features.png"
-            meta_path = clip_dir / "metadata.json"
-
-            plot_waveform(arrays["waveform"], arrays["waveform_sr"], waveform_path, path.name)
-            plot_spectrogram(arrays["freqs"], arrays["t_frames"], arrays["mag"], spectrogram_path, path.name)
-            plot_features(arrays["t_frames"], arrays["rms"], arrays["centroid"], arrays["onset"], features_path, path.name)
-
             meta["relative_path"] = rel
-            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-            results.append(
-                {
-                    "relative_path": rel,
-                    "source_uri": path.resolve().as_uri(),
-                    "meta": meta,
-                    "meta_rel": str(meta_path.relative_to(out_dir)),
-                    "waveform_rel": str(waveform_path.relative_to(out_dir)),
-                    "spectrogram_rel": str(spectrogram_path.relative_to(out_dir)),
-                    "features_rel": str(features_path.relative_to(out_dir)),
-                }
-            )
+            result_entry = {
+                "relative_path": rel,
+                "source_uri": path.resolve().as_uri(),
+                "meta": meta,
+            }
+
+            if not metadata_only:
+                slug = slugify(rel)
+                clip_dir = (out_dir / "clips") / slug
+                clip_dir.mkdir(parents=True, exist_ok=True)
+
+                waveform_path = clip_dir / "waveform.png"
+                spectrogram_path = clip_dir / "spectrogram.png"
+                features_path = clip_dir / "features.png"
+                meta_path = clip_dir / "metadata.json"
+
+                plot_waveform(arrays["waveform"], arrays["waveform_sr"], waveform_path, path.name)
+                plot_spectrogram(arrays["freqs"], arrays["t_frames"], arrays["mag"], spectrogram_path, path.name)
+                plot_features(arrays["t_frames"], arrays["rms"], arrays["centroid"], arrays["onset"], features_path, path.name)
+
+                meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+                result_entry["meta_rel"] = str(meta_path.relative_to(out_dir))
+                result_entry["waveform_rel"] = str(waveform_path.relative_to(out_dir))
+                result_entry["spectrogram_rel"] = str(spectrogram_path.relative_to(out_dir))
+                result_entry["features_rel"] = str(features_path.relative_to(out_dir))
+
+            results.append(result_entry)
         except Exception as e:
             errors.append({"path": str(path), "error": str(e)})
 
@@ -1198,8 +1217,11 @@ def main():
     aggregate["candidate_sets"] = candidate_sets
     aggregate["similarity_index"] = similarity_index
     (out_dir / "clips_summary.json").write_text(json.dumps(aggregate, indent=2), encoding="utf-8")
-    write_index(results, errors, input_dir, out_dir, candidate_sets, similarity_index)
-    print(f"Analyzed {len(results)} clips. Report: {out_dir / 'index.html'}")
+    if not metadata_only:
+        write_index(results, errors, input_dir, out_dir, candidate_sets, similarity_index)
+        print(f"Analyzed {len(results)} clips. Report: {out_dir / 'index.html'}")
+    else:
+        print(f"Analyzed {len(results)} clips (metadata-only). Output: {out_dir}")
     if errors:
         print(f"Errors: {len(errors)}")
 
