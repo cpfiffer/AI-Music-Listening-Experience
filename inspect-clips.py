@@ -1137,6 +1137,7 @@ def main():
     ap.add_argument("--out_dir", required=True, help="Folder to write report artifacts")
     ap.add_argument("--limit", type=int, default=None, help="Optional maximum number of clips to inspect")
     ap.add_argument("--metadata-only", action="store_true", help="Skip plot generation, output only JSON/CSV/similarity data")
+    ap.add_argument("--exclude", action="append", default=[], help="Subdirectory names to exclude (can specify multiple)")
     args = ap.parse_args()
 
     metadata_only = args.metadata_only
@@ -1148,6 +1149,9 @@ def main():
         clips_out.mkdir(parents=True, exist_ok=True)
 
     files = discover_audio_files(input_dir)
+    if args.exclude:
+        exclude_set = set(args.exclude)
+        files = [f for f in files if not any(part in exclude_set for part in f.relative_to(input_dir).parts)]
     if args.limit is not None:
         files = files[: args.limit]
 

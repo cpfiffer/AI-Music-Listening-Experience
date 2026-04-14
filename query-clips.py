@@ -257,25 +257,28 @@ def format_word_json(entry):
     }
 
 
-def handle_similarity(clips, sim_indexes, target_path, mode="similar"):
+def handle_similarity(clips, sim_indexes, target_path, mode="similar", multi_library=False):
     """Find clips similar to or contrasting with a target."""
-    # find target in similarity indexes
-    for sim_index in sim_indexes:
-        if sim_index and target_path in sim_index:
-            neighbors = sim_index[target_path].get(mode, [])
-            # resolve neighbor paths to clip objects
-            path_to_clip = {c.get("relative_path"): c for c in clips}
-            result = []
-            for nb in neighbors:
-                clip = path_to_clip.get(nb["relative_path"])
-                if clip:
-                    clip = dict(clip)
-                    clip["_similarity_distance"] = nb["distance"]
-                    result.append(clip)
-            return result
+    # use precomputed index only for single-library queries
+    if not multi_library:
+        for sim_index in sim_indexes:
+            if sim_index and target_path in sim_index:
+                neighbors = sim_index[target_path].get(mode, [])
+                path_to_clip = {c.get("relative_path"): c for c in clips}
+                result = []
+                for nb in neighbors:
+                    clip = path_to_clip.get(nb["relative_path"])
+                    if clip:
+                        clip = dict(clip)
+                        clip["_similarity_distance"] = nb["distance"]
+                        result.append(clip)
+                return result
 
-    # fallback: not in precomputed index, compute on the fly
-    print(f"Note: '{target_path}' not in precomputed similarity index, computing live", file=sys.stderr)
+    # live compute: either multi-library or target not in precomputed index
+    if multi_library:
+        print(f"Computing cross-library similarity for '{target_path}'...", file=sys.stderr)
+    else:
+        print(f"Note: '{target_path}' not in precomputed similarity index, computing live", file=sys.stderr)
     import numpy as np
     target_clip = None
     for c in clips:
@@ -341,11 +344,12 @@ def main():
         sys.exit(1)
 
     # handle similarity/contrast mode
+    multi_lib = len(args.library) > 1
     if args.similar_to:
-        results = handle_similarity(all_clips, sim_indexes, args.similar_to, "similar")
+        results = handle_similarity(all_clips, sim_indexes, args.similar_to, "similar", multi_library=multi_lib)
         results = results[:args.limit]
     elif args.contrast_with:
-        results = handle_similarity(all_clips, sim_indexes, args.contrast_with, "contrast")
+        results = handle_similarity(all_clips, sim_indexes, args.contrast_with, "contrast", multi_library=multi_lib)
         results = results[:args.limit]
     else:
         results = filter_clips(all_clips, args)
