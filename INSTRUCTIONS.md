@@ -158,3 +158,56 @@ Tell the AI to use the graphs to refine or confirm the internal playback it just
 - Send the JSON
 - Wait for the AI to listen
 - Send the 4 graphs
+
+---
+
+## Clip inspection workflow
+
+If you want to inspect a folder of production clips instead of one whole song, use:
+
+```bash
+python inspect-clips.py \
+  --input_dir "/Users/cameron/Documents/The Coil/music/co-production" \
+  --out_dir "./out-clips/co-production"
+```
+
+This generates:
+
+- `index.html` for visual browsing
+- `clips_summary.json` for machine-readable metadata
+- `clips_summary.csv` for quick slicing in Sheets / pandas / Excel
+- `candidate_sets.json` for grouped selections
+- `candidate_sets/*.m3u` for quick listening passes in a media player / DAW prep step
+- per-clip plots and JSON files under `./out-clips/co-production/clips/`
+
+Use this when you need to understand:
+
+- whether a clip is front-loaded or trailing
+- whether the ending decays naturally or feels chopped
+- whether the clip looks brighter/darker or denser/sparser
+- whether it is more likely to behave as a phrase, fragment, texture, bloom, or transition element
+
+These role suggestions are heuristic, not truth.
+
+The HTML report supports:
+
+- text search by path or role
+- filtering by role
+- filtering by descriptor tag
+- filtering by top-level group
+- sorting by duration, brightness, onset density, front-loadedness, or tail decay
+
+The heuristic layer now adds descriptor tags such as:
+
+- `vocalish`
+- `transient-heavy`
+- `sub-heavy`
+- `dark`
+- `bright`
+- `tonal`
+- `noisy`
+- `soft-entry`
+- `soft-tail`
+- `one-shot`
+
+These tags are meant to make browsing less blunt. They are still heuristics, not ground truth.

@@ -26,6 +26,21 @@ It creates:
 - RMS energy graph
 - spectral centroid graph
 
+### `inspect-clips.py`
+This is a smaller, clip-focused inspector for folders of production material.
+
+It creates:
+- per-clip waveform images
+- per-clip spectrogram images
+- per-clip feature overview images
+- per-clip JSON metadata
+- one browseable HTML report for the whole folder
+
+This is for questions like:
+- which clips are front-loaded vs trailing?
+- which clips are bright vs dark?
+- which clips look more like phrases, fragments, textures, or transition material?
+
 ### `INSTRUCTIONS.md`
 This is the practical step-by-step file.
 
@@ -164,6 +179,39 @@ This will generate:
 - `my-song_mel_spectrogram.png`
 - `my-song_rms_energy.png`
 - `my-song_spectral_centroid.png`
+
+To inspect a clip folder instead:
+
+```bash
+python inspect-clips.py \
+  --input_dir "/Users/cameron/Documents/The Coil/music/co-production" \
+  --out_dir "./out-clips/co-production"
+```
+
+This will generate:
+- `index.html`
+- `clips_summary.json`
+- `clips_summary.csv`
+- `candidate_sets.json`
+- `candidate_sets/*.json`, `*.csv`, `*.m3u`
+- one subfolder per analyzed clip with plots + metadata
+
+The HTML report includes:
+- summary panels for role counts, groups, ranges, and extremes
+- character tags inferred from additional heuristics
+- candidate-set panels with ready-to-open manifests
+- search/filter controls
+- sortable overview table
+- per-clip audio playback controls and plots
+
+Candidate sets currently include:
+- `vocalish_phrases`
+- `bloom_tails`
+- `dark_textures`
+- `bright_transients`
+- `one_shot_impacts`
+- `low_end_anchors`
+- `resample_fodder`
 
 ---
 
